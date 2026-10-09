@@ -25,15 +25,18 @@ def main():
         return
 
     tracker = HandTracker(model_path="models/hand_landmarker.task", max_hands=1)
-    classifier = GestureClassifier(pinch_threshold_ratio=0.28)
-    slide_tracker = SlideTracker(deadzone_ratio=0.04, speed_factor=2.5, smoothing_alpha=0.6)
+    classifier = GestureClassifier(pinch_in_ratio=0.28, pinch_out_ratio=0.38)
+    slide_tracker = SlideTracker()
     os_controller = OSController(media_cooldown_seconds=1.2, scroll_multiplier=1.2)
 
     print("=" * 60)
-    print(" GESTURE CONTROL RUNNING - PHASE 5")
+    print(" GESTURE CONTROL RUNNING")
     print("=" * 60)
     print(" Controls:")
     print("  • Pinch & Slide: Touchscreen-style variable scrolling")
+    print("  • Pinch & Flick: High-speed flick with inertia coasting")
+    print("  • Point UP (Index up, others folded): Hands-free continuous scroll UP")
+    print("  • Point DOWN (Index + Pinky up, others folded): Hands-free continuous scroll DOWN")
     print("  • Peace Sign (V): Play / Pause (1.2s debounced)")
     print("  • Press 't' in window: Toggle tracking ON / OFF")
     print("  • Press 'q' or 'Esc': Exit")
@@ -59,6 +62,9 @@ def main():
 
         scroll_delta = 0.0
         velocity = 0.0
+        is_coasting = False
+        point_scrolling = False
+        point_dir = None
         current_pose = "NO_HAND"
         is_pinched = False
         pinch_center = None
@@ -72,14 +78,19 @@ def main():
             finger_states = classifier.get_finger_states(landmarks_px)
             current_pose = classifier.classify_pose(finger_states, is_pinched)
 
-            # 1. Slide & Scroll Action
-            scroll_delta, velocity = slide_tracker.update(
+            # 1. Slide & Scroll Action (Pinch / Flick)
+            scroll_delta, velocity, is_coasting = slide_tracker.update(
                 is_pinched, pinch_center, hand_scale
             )
             if abs(scroll_delta) > 0.5 and os_controller.is_enabled:
                 os_controller.dispatch_scroll(scroll_delta)
 
-            # 2. Discrete Pose Action (Play / Pause)
+            # 2. Hands-Free Point Scroll (Point UP / Point DOWN)
+            point_scrolling, point_dir = False, None
+            if not is_pinched and not is_coasting:
+                point_scrolling, point_dir = os_controller.handle_point_scroll(current_pose)
+
+            # 3. Discrete Pose Action (Play / Pause)
             if current_pose == "PLAY_PAUSE" and os_controller.is_enabled:
                 triggered = os_controller.trigger_play_pause()
                 if triggered:
@@ -140,10 +151,20 @@ def main():
 
         # Scroll output
         dir_text = "Scroll: IDLE"
-        if scroll_delta > 1.0:
+        scroll_color = (180, 180, 180)
+
+        if point_scrolling:
+            dir_text = f"POINT SCROLL: {point_dir}"
+            scroll_color = (0, 255, 128)  # Bright spring green for hands-free point scroll
+        elif is_coasting:
+            dir_text = f"FLICK GLIDE: {'UP' if scroll_delta > 0 else 'DOWN'} ({int(scroll_delta)})"
+            scroll_color = (0, 165, 255)  # Orange during flick glide
+        elif scroll_delta > 1.0:
             dir_text = f"Scroll: UP (+{int(scroll_delta)})"
+            scroll_color = (0, 255, 255)
         elif scroll_delta < -1.0:
             dir_text = f"Scroll: DOWN ({int(scroll_delta)})"
+            scroll_color = (0, 255, 255)
 
         cv2.putText(
             frame,
@@ -151,7 +172,7 @@ def main():
             (15, 95),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.6,
-            (0, 255, 255) if abs(scroll_delta) > 1.0 else (180, 180, 180),
+            scroll_color,
             2,
             cv2.LINE_AA,
         )

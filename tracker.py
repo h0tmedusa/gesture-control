@@ -39,9 +39,9 @@ class HandTracker:
             base_options=base_options,
             running_mode=vision.RunningMode.VIDEO,
             num_hands=max_hands,
-            min_hand_detection_confidence=0.6,
-            min_hand_presence_confidence=0.6,
-            min_tracking_confidence=0.6,
+            min_hand_detection_confidence=0.45,
+            min_hand_presence_confidence=0.45,
+            min_tracking_confidence=0.45,
         )
         self.landmarker = vision.HandLandmarker.create_from_options(options)
         self.latest_result = None
