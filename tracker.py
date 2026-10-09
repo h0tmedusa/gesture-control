@@ -30,7 +30,13 @@ HAND_CONNECTIONS = [
 
 
 class HandTracker:
-    def __init__(self, model_path: str = "models/hand_landmarker.task", max_hands: int = 1):
+    def __init__(
+        self,
+        model_path: str = "models/hand_landmarker.task",
+        max_hands: int = 1,
+        detection_confidence: float = 0.45,
+        tracking_confidence: float = 0.45,
+    ):
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model file not found at: {model_path}")
 
@@ -39,9 +45,9 @@ class HandTracker:
             base_options=base_options,
             running_mode=vision.RunningMode.VIDEO,
             num_hands=max_hands,
-            min_hand_detection_confidence=0.45,
-            min_hand_presence_confidence=0.45,
-            min_tracking_confidence=0.45,
+            min_hand_detection_confidence=detection_confidence,
+            min_hand_presence_confidence=detection_confidence,
+            min_tracking_confidence=tracking_confidence,
         )
         self.landmarker = vision.HandLandmarker.create_from_options(options)
         self.latest_result = None

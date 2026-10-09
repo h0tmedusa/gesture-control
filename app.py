@@ -1,14 +1,11 @@
 """
-Phase 5: Gesture Control System Integration
-Integrates HandTracker, GestureClassifier, SlideTracker, and OSController.
-Full end-to-end functionality:
-- Pinch-and-Slide: variable-speed smooth scrolling
-- Peace Sign: debounced Play/Pause media toggle
-- Spacebar / 't' key: toggle gesture control ON/OFF
+Live Gesture Control Application
+Wires together tracker, gestures, motion, controller, and centralized config.
 """
 
 import time
 import cv2
+import config
 from tracker import HandTracker
 from gestures import GestureClassifier
 from motion import SlideTracker
@@ -16,18 +13,40 @@ from controller import OSController
 
 
 def main():
-    cap = cv2.VideoCapture(0)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap = cv2.VideoCapture(config.CAMERA_INDEX)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
 
     if not cap.isOpened():
-        print("[ERROR] Could not open webcam.")
+        print(f"[ERROR] Could not open webcam at index {config.CAMERA_INDEX}.")
         return
 
-    tracker = HandTracker(model_path="models/hand_landmarker.task", max_hands=1)
-    classifier = GestureClassifier(pinch_in_ratio=0.28, pinch_out_ratio=0.38)
-    slide_tracker = SlideTracker()
-    os_controller = OSController(media_cooldown_seconds=1.2, scroll_multiplier=1.2)
+    tracker = HandTracker(
+        model_path=config.MODEL_PATH,
+        max_hands=1,
+        detection_confidence=config.DETECTION_CONFIDENCE,
+        tracking_confidence=config.TRACKING_CONFIDENCE,
+    )
+    classifier = GestureClassifier(
+        pinch_in_ratio=config.PINCH_IN_RATIO,
+        pinch_out_ratio=config.PINCH_OUT_RATIO,
+        finger_straightness_min=config.FINGER_STRAIGHTNESS_MIN,
+    )
+    slide_tracker = SlideTracker(
+        deadzone_ratio=config.DEADZONE_RATIO,
+        speed_factor=config.BASE_SPEED_FACTOR,
+        smoothing_alpha=config.SMOOTHING_ALPHA,
+        flick_acceleration=config.FLICK_ACCELERATION,
+        flick_min_velocity=config.FLICK_MIN_VELOCITY,
+        friction_decay=config.FRICTION_DECAY,
+        ghost_frame_tolerance=config.GHOST_FRAME_TOLERANCE,
+    )
+    os_controller = OSController(
+        media_cooldown_seconds=config.MEDIA_COOLDOWN_SECONDS,
+        scroll_multiplier=config.SCROLL_MULTIPLIER,
+        point_scroll_speed=config.POINT_SCROLL_SPEED,
+        point_hold_duration_seconds=config.POINT_HOLD_DELAY_SECONDS,
+    )
 
     print("=" * 60)
     print(" GESTURE CONTROL RUNNING")
@@ -37,9 +56,10 @@ def main():
     print("  • Pinch & Flick: High-speed flick with inertia coasting")
     print("  • Point UP (Index up, others folded): Hands-free continuous scroll UP")
     print("  • Point DOWN (Index + Pinky up, others folded): Hands-free continuous scroll DOWN")
-    print("  • Peace Sign (V): Play / Pause (1.2s debounced)")
-    print("  • Press 't' in window: Toggle tracking ON / OFF")
-    print("  • Press 'q' or 'Esc': Exit")
+    print("  • Peace Sign (V): Play / Pause (debounced)")
+    print("  • Fist: Complete idle / neutral state (cancels inputs)")
+    print(f"  • Press '{config.TOGGLE_KEY}' in window: Toggle tracking ON / OFF")
+    print(f"  • Press '{config.QUIT_KEY}' or 'Esc': Exit")
     print("  • Emergency Fail-Safe: Slam mouse pointer into any screen corner")
     print("=" * 60)
 
@@ -54,7 +74,9 @@ def main():
         if not success or frame is None:
             break
 
-        frame = cv2.flip(frame, 1)
+        if config.MIRROR_FEED:
+            frame = cv2.flip(frame, 1)
+
         timestamp_ms = int((time.time() - start_time) * 1000)
 
         tracker.process_frame(frame, timestamp_ms)
@@ -78,6 +100,11 @@ def main():
             finger_states = classifier.get_finger_states(landmarks_px)
             current_pose = classifier.classify_pose(finger_states, is_pinched)
 
+            # If the user makes a FIST, override pinch state and reset motion
+            if current_pose == "FIST":
+                is_pinched = False
+                slide_tracker.reset()
+
             # 1. Slide & Scroll Action (Pinch / Flick)
             scroll_delta, velocity, is_coasting = slide_tracker.update(
                 is_pinched, pinch_center, hand_scale
@@ -86,7 +113,6 @@ def main():
                 os_controller.dispatch_scroll(scroll_delta)
 
             # 2. Hands-Free Point Scroll (Point UP / Point DOWN)
-            point_scrolling, point_dir = False, None
             if not is_pinched and not is_coasting:
                 point_scrolling, point_dir = os_controller.handle_point_scroll(current_pose)
 
@@ -95,7 +121,7 @@ def main():
                 triggered = os_controller.trigger_play_pause()
                 if triggered:
                     action_banner = "PLAY / PAUSE TRIGGERED"
-                    banner_timer = time.time() + 1.2
+                    banner_timer = time.time() + config.MEDIA_COOLDOWN_SECONDS
 
             # Visual overlay for pinch
             if pinch_center and is_pinched:
@@ -125,7 +151,7 @@ def main():
 
         # Visual HUD
         # Active Status Header
-        status_text = "STATUS: ACTIVE" if os_controller.is_enabled else "STATUS: PAUSED ('t' to resume)"
+        status_text = "STATUS: ACTIVE" if os_controller.is_enabled else f"STATUS: PAUSED ('{config.TOGGLE_KEY}' to resume)"
         status_color = (0, 255, 0) if os_controller.is_enabled else (0, 0, 255)
         cv2.putText(
             frame,
@@ -138,13 +164,19 @@ def main():
             cv2.LINE_AA,
         )
 
+        pose_color = (255, 200, 0)
+        if current_pose == "FIST":
+            pose_color = (160, 160, 160)  # Neutral grey for Fist
+        elif current_pose == "PLAY_PAUSE":
+            pose_color = (255, 128, 0)
+
         cv2.putText(
             frame,
             f"Pose: {current_pose}",
             (15, 65),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.7,
-            (255, 200, 0),
+            pose_color,
             2,
             cv2.LINE_AA,
         )
@@ -227,7 +259,7 @@ def main():
 
         cv2.putText(
             frame,
-            "Phase 5: Live Control ['t': Pause/Resume | 'q': Quit]",
+            f"Live Control ['{config.TOGGLE_KEY}': Pause/Resume | '{config.QUIT_KEY}': Quit]",
             (15, frame.shape[0] - 15),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.5,
@@ -236,12 +268,12 @@ def main():
             cv2.LINE_AA,
         )
 
-        cv2.imshow("Gesture Control - Phase 5", frame)
+        cv2.imshow("Gesture Control", frame)
 
         key = cv2.waitKey(1) & 0xFF
-        if key == ord('q') or key == 27:
+        if key == ord(config.QUIT_KEY) or key == 27:
             break
-        elif key == ord('t') or key == ord(' '):
+        elif key == ord(config.TOGGLE_KEY) or key == ord(' '):
             os_controller.toggle_active()
             print(f"[STATUS] Controller active state: {os_controller.is_enabled}")
 
